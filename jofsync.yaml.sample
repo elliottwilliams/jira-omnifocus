@@ -2,6 +2,8 @@
 jira:
   hostname: 'http://example.atlassian.net'
   username: 'me'
+  # If password is omitted, the script will look for username@hostname in
+  # the OS X login keychain.
   password: 'secret'
   context:  'Office'
   project:  'Jira'

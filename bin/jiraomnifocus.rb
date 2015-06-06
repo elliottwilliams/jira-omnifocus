@@ -6,6 +6,7 @@ Bundler.require(:default)
 require 'appscript'
 require 'yaml'
 require 'net/http'
+require 'highline/import'
 
 opts = Trollop::options do
   banner ""
@@ -69,11 +70,17 @@ syms.each { |x|
  end
 }
 
+def lookup_password(hostname, username)
+    lookup = `security find-internet-password -g -a #{username} -s #{hostname} 2>&1 >/dev/null`
+    lookup[/^password: "(.*)"$/, 1] or false
+end
+
 unless opts[:password]
   if config[:jira][:password]
     opts[:password] = config[:jira][:password]
   else
-    opts[:password] = ask("password: ") {|q| q.echo = false}
+    opts[:password] = lookup_password(URI(opts[:hostname]).host, opts[:username]) or
+                      ask("password: ") {|q| q.echo = false}
   end
 end
 
@@ -152,7 +159,7 @@ def add_task(omnifocus_document, new_task_properties)
   # Make a new Task in the Project
   proj.make(:new => :task, :with_properties => tprops)
 
-  puts "task created"
+  puts "#{name}: task created"
   return true
 end
 
@@ -198,7 +205,8 @@ def mark_resolved_jira_tickets_as_complete_in_omnifocus ()
   ctx.tasks.get.find.each do |task|
     if !task.completed.get && task.note.get.match(JIRA_BASE_URL)
       # try to parse out jira id
-      full_url= task.note.get
+      name= ticket_id task.name.get
+      full_url= task.note.get.lines.first
       jira_id=full_url.sub(JIRA_BASE_URL+"/browse/","")
       # check status of the jira
       uri = URI(JIRA_BASE_URL + '/rest/api/2/issue/' + jira_id)
@@ -208,35 +216,41 @@ def mark_resolved_jira_tickets_as_complete_in_omnifocus ()
         request.basic_auth USERNAME, PASSWORD
         response = http.request request
 
-  if response.code =~ /20[0-9]{1}/
+        puts "#{name}: Checking for updates"
+
+        if response.code =~ /20[0-9]{1}/
             data = JSON.parse(response.body)
             # Check to see if the Jira ticket has been resolved, if so mark it as complete.
             resolution = data["fields"]["resolution"]
             if resolution != nil
-              # if resolved, mark it as complete in OmniFocus
-              if task.completed.get != true
-                task.completed.set(true)
-                puts "task marked completed"
-              end
+                # if resolved, mark it as complete in OmniFocus
+                if task.completed.get != true
+                    task.completed.set(true)
+                    puts "#{name}: task marked completed"
+                end
             end
             # Check to see if the Jira ticket has been unassigned or assigned to someone else, if so delete it.
             # It will be re-created if it is assigned back to you.
             if ! data["fields"]["assignee"]
-              omnifocus_document.delete task
-              puts "task removed"
-            else
-              assignee = data["fields"]["assignee"]["name"]
-              if assignee != USERNAME
                 omnifocus_document.delete task
-                puts "task removed"
-              end
+                puts "#{name}: task removed"
+            else
+                assignee = data["fields"]["assignee"]["name"]
+                if assignee != USERNAME
+                    omnifocus_document.delete task
+                    puts "#{name}: task removed"
+                end
             end
         else
-         raise StandardError, "Unsuccessful response code " + response.code + " for issue " + issue
+            raise StandardError, "Unsuccessful response code " + response.code + " for issue " + issue
         end
       end
     end
   end
+end
+
+def ticket_id(name)
+    name[/^[a-zA-Z]+-[0-9]+/]
 end
 
 def app_is_running(app_name)
